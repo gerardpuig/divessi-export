@@ -22,7 +22,23 @@ class SSIApi:
 
         return response.json()["token"]
 
+    def get_wildlife(self) -> list:
+        response = requests.get(
+            f"{BASE_URL}?what=get_wildlife_vars&token={self.token}&ssiapp={CLIENT_APP}"
+        )
+
+        if response.status_code != 200:
+            response.raise_for_status()
+
+        wildlife = {}
+        for animal in response.json()["wildlife"]['animal']:
+            wildlife[animal["id"]] = animal["title_key"]
+
+        return wildlife
+
     def get_divelog(self) -> list:
+        wildlife = self.get_wildlife()
+
         response = requests.get(
             f"{BASE_URL}?what=get_divelog&token={self.token}&ssiapp={CLIENT_APP}"
         )
@@ -37,6 +53,10 @@ class SSIApi:
         logbook = []
         for divelog in response.json()["logbook_details"]:
             nitrox_percent = divelog["odin_user_log_ean_percent"]
+
+            animals = []
+            for animal_id in divelog['odin_user_log_animal_ids']:
+                animals.append(wildlife[animal_id])
 
             logbook.append(
                 dict(
@@ -62,7 +82,10 @@ class SSIApi:
                     avg_depth=divelog["odin_user_log_avg_depth_m"],
                     consumption_l=divelog["odin_user_log_amv_l"],
                     gear_details=divelog["odin_user_log_gear_details"],
+                    animals=", ".join(animals),
                     divecenter=divelog["odin_user_log_divecenter_confirmed_name"],
+                    depth_dataset=divelog["odin_user_log_depthDataset"],
+                    temp_dataset=divelog["odin_user_log_tempDataset"],
                 )
             )
 
