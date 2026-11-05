@@ -161,3 +161,6 @@ cython_debug/
 
 # Local params
 params.py
+
+# Local CSV files
+*.csv

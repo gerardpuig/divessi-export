@@ -4,7 +4,7 @@ import pytest
 import requests_mock
 
 from divessi.api import SSIApi
-from divessi.constants import BASE_URL, CLIENT_APP
+from divessi.constants import BASE_URL, SSI_APP_PARAMS, SSI_HEADERS
 from divessi.exceptions import AuthenticationException
 
 
@@ -14,12 +14,18 @@ def test_authenticate():
 
     with requests_mock.Mocker() as m:
         m.get(
-            f"{BASE_URL}?l={username}&p={password}&what=authenticate&ssiapp={CLIENT_APP}",
-            json={"token": "success"},
+            f"{BASE_URL}?what=authenticate",
+            json={"authenticated": True, "token": "success"},
         )
         api = SSIApi(username, password)
 
     assert api.token == "success"
+    assert m.last_request.headers["User-Agent"] == SSI_HEADERS["User-Agent"]
+    assert m.last_request.headers["Accept"] == "application/json"
+    assert all(
+        m.last_request.qs[key.lower()] == [value.lower()]
+        for key, value in SSI_APP_PARAMS.items()
+    )
 
 
 def test_authenticate_error():
@@ -28,7 +34,7 @@ def test_authenticate_error():
 
     with requests_mock.Mocker() as m, pytest.raises(AuthenticationException):
         m.get(
-            f"{BASE_URL}?l={username}&p={password}&what=authenticate&ssiapp={CLIENT_APP}",
+            f"{BASE_URL}?what=authenticate",
             json={},
         )
         api = SSIApi(username, password)
@@ -45,7 +51,11 @@ def test_get_divelog():
         "divessi.api.SSIApi._authenticate", return_value=token
     ), requests_mock.Mocker() as m:
         m.get(
-            f"{BASE_URL}?what=get_divelog&token={token}&ssiapp={CLIENT_APP}",
+            f"{BASE_URL}?what=get_wildlife_vars",
+            json={"wildlife": {"animal": []}},
+        )
+        m.get(
+            f"{BASE_URL}?what=get_divelog",
             json={
                 "logbook_sites": [
                     {"odin_dive_sites_id": 1, "odin_dive_sites_name": "Thistlegorm"}
@@ -72,12 +82,24 @@ def test_get_divelog():
                         "odin_user_log_amv_l": 13,
                         "odin_user_log_gear_details": "5mm",
                         "odin_user_log_divecenter_confirmed_name": "SSI Dive Center",
+                        "odin_user_log_animal_ids": [],
+                        "odin_user_log_depthDataset": [],
+                        "odin_user_log_tempDataset": [],
                     }
                 ],
             },
         )
         divelog = SSIApi(username, password).get_divelog()
 
+    assert all(
+        request.headers["User-Agent"] == SSI_HEADERS["User-Agent"]
+        for request in m.request_history
+    )
+    assert all(
+        request.qs[key.lower()] == [value.lower()]
+        for request in m.request_history
+        for key, value in SSI_APP_PARAMS.items()
+    )
     assert len(divelog) == 1
 
     dive = divelog[0]
@@ -101,3 +123,38 @@ def test_get_divelog():
     assert dive["consumption_l"] == 13
     assert dive["gear_details"] == "5mm"
     assert dive["divecenter"] == "SSI Dive Center"
+
+
+def test_get_wildlife_encodes_token():
+    username = "email"
+    password = "password"
+    token = "token+with&reserved=value"
+
+    with mock.patch(
+        "divessi.api.SSIApi._authenticate", return_value=token
+    ), requests_mock.Mocker() as m:
+        m.get(
+            f"{BASE_URL}?what=get_wildlife_vars",
+            json={"wildlife": {"animal": []}},
+        )
+        wildlife = SSIApi(username, password).get_wildlife()
+
+    assert wildlife == {}
+    assert m.last_request.qs["token"] == [token]
+    assert m.last_request.headers["User-Agent"] == SSI_HEADERS["User-Agent"]
+
+
+def test_get_wildlife_rejects_token_invalid_body():
+    with mock.patch(
+        "divessi.api.SSIApi._authenticate", return_value="token"
+    ), requests_mock.Mocker() as m:
+        m.get(
+            f"{BASE_URL}?what=get_wildlife_vars",
+            json={
+                "status": 401,
+                "result": "Token not valid (token_not_found)",
+            },
+        )
+
+        with pytest.raises(AuthenticationException, match="Sign in again"):
+            SSIApi("email", "password").get_wildlife()

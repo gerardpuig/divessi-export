@@ -1,6 +1,6 @@
 import requests
 
-from .constants import BASE_URL, CLIENT_APP, TANK_TYPES
+from .constants import BASE_URL, SSI_APP_PARAMS, SSI_HEADERS, TANK_TYPES
 from .exceptions import AuthenticationException
 
 
@@ -11,52 +11,65 @@ class SSIApi:
         if not self.token:
             self.token = self._authenticate(username, password)
 
-    def _authenticate(self, username: str, password: str) -> str:
+    def _get_json(self, what: str, **params) -> dict:
         response = requests.get(
-            f"{BASE_URL}?l={username}&p={password}&what=authenticate&ssiapp={CLIENT_APP}"
-        )
-
-        # Authentication endpoint always returns 200, even if wrong credentials.
-        if "token" not in response.json().keys():
-            raise AuthenticationException
-
-        return response.json()["token"]
-
-    def get_wildlife(self) -> list:
-        response = requests.get(
-            f"{BASE_URL}?what=get_wildlife_vars&token={self.token}&ssiapp={CLIENT_APP}"
+            BASE_URL,
+            params={
+                **SSI_APP_PARAMS,
+                "what": what,
+                **params,
+            },
+            headers=SSI_HEADERS,
         )
 
         if response.status_code != 200:
             response.raise_for_status()
 
+        response_data = response.json()
+        if response_data.get("status") in (401, "401"):
+            raise AuthenticationException(
+                "SSI rejected the token. Sign in again and retry the export."
+            )
+        if response_data.get("authenticated") is False:
+            message = (
+                "SSI rejected the credentials."
+                if what == "authenticate"
+                else "SSI rejected the token. Sign in again and retry the export."
+            )
+            raise AuthenticationException(message)
+
+        return response_data
+
+    def _authenticate(self, username: str, password: str) -> str:
+        response_data = self._get_json("authenticate", l=username, p=password)
+        if "token" not in response_data:
+            raise AuthenticationException
+
+        return response_data["token"]
+
+    def get_wildlife(self) -> list:
+        response_data = self._get_json("get_wildlife_vars", token=self.token)
         wildlife = {}
-        for animal in response.json()["wildlife"]['animal']:
+        for animal in response_data["wildlife"]["animal"]:
             wildlife[animal["id"]] = animal["title_key"]
 
         return wildlife
 
     def get_divelog(self) -> list:
         wildlife = self.get_wildlife()
-
-        response = requests.get(
-            f"{BASE_URL}?what=get_divelog&token={self.token}&ssiapp={CLIENT_APP}"
-        )
-
-        if response.status_code != 200:
-            response.raise_for_status()
+        response_data = self._get_json("get_divelog", token=self.token)
 
         sites_map = {}
-        for site in response.json()["logbook_sites"]:
+        for site in response_data["logbook_sites"]:
             sites_map[site["odin_dive_sites_id"]] = site["odin_dive_sites_name"]
 
         logbook = []
-        for divelog in response.json()["logbook_details"]:
+        for divelog in response_data["logbook_details"]:
             nitrox_percent = divelog["odin_user_log_ean_percent"]
 
-            animals = []
-            for animal_id in divelog['odin_user_log_animal_ids']:
-                animals.append(wildlife[animal_id])
+            animals = [
+                wildlife[animal_id] for animal_id in divelog["odin_user_log_animal_ids"]
+            ]
 
             logbook.append(
                 dict(
